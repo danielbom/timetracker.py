@@ -42,7 +42,7 @@ def command_start(message="", category="", start="", end="") -> Row:
         end = None
 
     new_row = Row(message=message, start=start, category=category, end=end)
-    TimetrackerRepository.create(new_row)
+    new_row = TimetrackerRepository.create(new_row)
     return new_row
 
 
@@ -61,7 +61,7 @@ def command_start_in(rowid="", message="", category="") -> Row:
         raise CommandError(f"Row with id {rowid} is still running")
 
     new_row = Row(message=message, start=row.end, category=category)
-    TimetrackerRepository.create(new_row)
+    new_row = TimetrackerRepository.create(new_row)
     return new_row
 
 
@@ -77,7 +77,7 @@ def command_restart(rowid="") -> Row:
         raise CommandError(f"Row with id {rowid} is still running")
 
     new_row = Row(message=row.message, start=row.start, category=row.category)
-    TimetrackerRepository.create(new_row)
+    new_row = TimetrackerRepository.create(new_row)
     return new_row
 
 
@@ -90,7 +90,7 @@ def command_end(rowid="") -> Row:
         raise CommandError(f"No row with id {rowid} found")
 
     updated_row = row._replace(end=datetime.now())
-    TimetrackerRepository.update(updated_row)
+    updated_row = TimetrackerRepository.update(updated_row)
     return updated_row
 
 
@@ -118,3 +118,4 @@ def command_to_csv(output_file=""):
     rows = TimetrackerRepository.find_many_iter(asc=True)
     with output_file.open("w", encoding=DATA_ENCODING) as f:
         f.writelines(row.to_csv() + "\n" for row in rows)
+ 

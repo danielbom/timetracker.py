@@ -3,7 +3,7 @@ from typing import NamedTuple, Optional
 from constants import DATA_ENCODING, DB_DATE_FORMAT, DB_PATH, CSV_DATE_FORMAT, CSV_ROW_SEP
 from database import db_up
 
-from lib.micro_sqlite_orm import MicroSqliteORM
+from libraries.micro_sqlite_orm import MicroSqliteORM
 
 
 with MicroSqliteORM(DB_PATH) as orm:

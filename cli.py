@@ -26,8 +26,8 @@ def _print_row(row: Row):
     # https://stackoverflow.com/questions/31018497/how-to-format-duration-in-python-timedelta
     start = row.start.strftime(CLI_PRINT_DATE_FORMAT)
     end = row.end.strftime(CLI_PRINT_DATE_FORMAT) if row.end else (" " * 15)
-    duration = _format_duration(row.start - (row.end or datetime.now()))
-    print(f"{start} .. {end} | {duration} | {row.message}")
+    duration = _format_duration((row.end or datetime.now()) - row.start)
+    print(f"{start} .. {end} | {duration} | [{row.rowid}] {row.message}")
 
 
 def cmd_list(args):

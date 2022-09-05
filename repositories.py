@@ -50,7 +50,7 @@ class TimetrackerRepository:
     def create(row: Row):
         with MicroSqliteORM(DB_PATH) as orm:
             orm.insert("timetrack", row.to_dict_db())
-        return row
+            return row._replace(rowid=orm.cursor.lastrowid)
 
     @staticmethod
     def update(row: Row):
@@ -69,6 +69,7 @@ class TimetrackerRepository:
                     "end": row.end.strftime(DB_DATE_FORMAT),
                 },
             )
+            return row._replace(rowid=orm.cursor.lastrowid)
 
     @staticmethod
     def store_or_update(row: Row):
@@ -81,6 +82,7 @@ class TimetrackerRepository:
                 },
                 values=row.to_dict_db(),
             )
+            return row._replace(rowid=orm.cursor.lastrowid)
 
     @staticmethod
     def max_rowid(**kargs) -> int:
