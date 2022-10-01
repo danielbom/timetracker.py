@@ -1,11 +1,18 @@
-from datetime import datetime, timedelta
-from itertools import groupby
 import sys
 import traceback
-from commands import command_end, command_from_csv, command_list, command_restart, command_start, command_start_in, command_to_csv
+from datetime import datetime, timedelta
+from itertools import groupby
+
+from commands import (command_drop, command_edit, command_end,
+                      command_from_csv, command_list, command_restart,
+                      command_start, command_start_in, command_to_csv)
 from constants import CLI_DATE_FORMAT, CLI_HOUR_FORMAT, CLI_PRINT_DATE_FORMAT
 from core import Row
 from repositories import TimetrackerRepository
+
+
+def clean_args_skip(args):
+    return [it if it != '-' else '' for it in args]
 
 
 def normalize_durantion(duration: timedelta):
@@ -19,20 +26,20 @@ def _sum_timedelta(iterable):
 def _format_duration(duration: timedelta):
     hours, remainder = divmod(duration.total_seconds(), 3600)
     minutes, _seconds = divmod(remainder, 60)
-    return f"{int(hours):02d}:{int(minutes):02d}"
+    return f'{int(hours):02d}:{int(minutes):02d}'
 
 
 def _print_row(row: Row):
     # https://stackoverflow.com/questions/31018497/how-to-format-duration-in-python-timedelta
     start = row.start.strftime(CLI_PRINT_DATE_FORMAT)
-    end = row.end.strftime(CLI_PRINT_DATE_FORMAT) if row.end else (" " * 15)
+    end = row.end.strftime(CLI_PRINT_DATE_FORMAT) if row.end else (' ' * 15)
     duration = _format_duration((row.end or datetime.now()) - row.start)
-    print(f"{start} .. {end} | {duration} | [{row.rowid}] {row.message}")
+    print(f'{start} .. {end} | {duration} | [{row.rowid}] {row.message}')
 
 
 def cmd_list(args):
     now = datetime.now()
-    rows = command_list(*args)
+    rows = command_list(*clean_args_skip(args))
 
     max_rowid = TimetrackerRepository.max_rowid()
     rowid_len = len(str(max_rowid))
@@ -40,96 +47,130 @@ def cmd_list(args):
     for row in rows:
         start_day = row.start.strftime(CLI_DATE_FORMAT)
         start = row.start.strftime(CLI_HOUR_FORMAT)
-        end = row.end.strftime(CLI_HOUR_FORMAT) if row.end else "--:--"
+        end = row.end.strftime(CLI_HOUR_FORMAT) if row.end else '--:--'
         duration = _format_duration((row.end or now) - row.start)
         rowid = str(row.rowid).rjust(rowid_len)
-        print(f"{rowid}: {start_day} | {start} .. {end} | {duration} | {row.message}")
+        print(
+            f'{rowid}: {start_day} | {start} .. {end} | {duration} | {row.message}'
+        )
 
 
 def cmd_start(args):
-    new_row = command_start(*args)
+    new_row = command_start(*clean_args_skip(args))
     _print_row(new_row)
 
 
 def cmd_start_in(args):
     if len(args) < 1:
-        print("Error: No id given")
+        print('Error: No id given')
         exit(1)
 
-    new_row = command_start_in(*args)
+    new_row = command_start_in(*clean_args_skip(args))
     _print_row(new_row)
 
 
 def cmd_restart(args):
     if len(args) < 1:
-        print("Error: No id given")
+        print('Error: No id given')
         exit(1)
 
-    new_row = command_restart(*args)
+    new_row = command_restart(*clean_args_skip(args))
     _print_row(new_row)
 
 
 def cmd_end(args):
     if len(args) < 1:
-        print("Error: No id given")
+        print('Error: No id given')
         exit(1)
 
-    row = command_end(*args)
+    row = command_end(*clean_args_skip(args))
     _print_row(row)
 
 
+def cmd_edit(args):
+    def parse_edit(text):
+        parts = text.split(',')
+        key_values = [part.split('=') for part in parts]
+        return {key: value for key, value in key_values}
+
+    if len(args) < 1:
+        print('Error: No id given')
+        exit(1)
+
+    if len(args) < 2:
+        print('Error: No edit given')
+        exit(1)
+
+    row = command_edit(args[0], **parse_edit(args[1]))
+    _print_row(row)
+
+
+def cmd_drop(args):
+    row = command_drop(*args)
+    _print_row(row)
+    print('Deleted')
+
+
 def cmd_to_csv(args):
-    command_to_csv(args[0] if len(args) > 0 else "")
-    print("Done")
+    command_to_csv(args[0] if len(args) > 0 else '')
+    print('Done')
 
 
 def cmd_from_csv(args):
-    command_from_csv(args[0] if len(args) > 0 else "")
-    print("Done")
+    command_from_csv(args[0] if len(args) > 0 else '')
+    print('Done')
 
 
 def cmd_metrics(args):
     # TODO: Improve this metrics
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     rows = TimetrackerRepository.find_many(today)
-    print(f"Total rows: {len(rows)}")
-    print(f"Total time: {_sum_timedelta(row.duration for row in rows)}")
+    print(f'Total rows: {len(rows)}')
+    print(f'Total time: {_sum_timedelta(row.duration for row in rows)}')
 
     rows_with_category = [row for row in rows if row.category]
-    print(f"Total rows with category: {len(rows_with_category)}")
+    print(f'Total rows with category: {len(rows_with_category)}')
 
-    for category, category_rows in groupby(rows_with_category, key=lambda row: row.category):
-        print(f"{category}: {_sum_timedelta(row.duration for row in category_rows)}")
+    for category, category_rows in groupby(
+        rows_with_category, key=lambda row: row.category
+    ):
+        print(
+            f'{category}: {_sum_timedelta(row.duration for row in category_rows)}'
+        )
 
 
 def cmd_help():
     commands = [
-        ("start <message> <category?> <start?> <end?>", "Start a new row"),
-        ("start-in <id> '<message> <category?>'",
-         "Start a new row in the end of a row"),
-        ("restart <id>", "Restart a row"),
-        ("end <id>", "End a row"),
-        ("list <date?>", "List all rows"),
-        ("to-csv", "Export to CSV"),
-        ("from-csv", "Import from CSV"),
-        ("metrics", "Show metrics"),
-        ("help", "Show this help"),
+        ('start    <message> <category?> <start?> <end?>', 'Start a new row'),
+        (
+            'start-in <id> <message> <category?>',
+            'Start a new row in the end of a row',
+        ),
+        ('restart  <id>', 'Restart a row'),
+        ('end      <id>', 'End a row'),
+        ('drop     <id>', 'Drop a row'),
+        ('edit     <id> <field=value*>', 'Drop a row'),
+        ('list     <date?>', 'List all rows'),
+        ('to-csv', 'Export to CSV'),
+        ('from-csv', 'Import from CSV'),
+        ('metrics', 'Show metrics'),
+        ('help', 'Show this help'),
     ]
-    print("Usage: cli.py [command]")
-    print("Commands:")
-    print("")
+    print('Usage: cli.py [command]')
+    print('Commands:')
+    print('')
     for command, description in commands:
-        print(f"  {command:20} {description}")
+        print(f'  {command:50} - {description}')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     args = sys.argv[1:]
     cmd = globals().get(f"cmd_{args[0].replace('-', '_')}") if args else None
     if cmd:
         try:
             cmd(args[1:])
         except Exception as e:
-            print("Error:", e)
+            print('Error:', e)
             traceback.print_exc()
             exit(1)
     else:

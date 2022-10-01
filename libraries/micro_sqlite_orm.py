@@ -1,4 +1,5 @@
 import sqlite3
+from typing import List, Tuple
 
 ALL_ROWS = -1
 
@@ -13,8 +14,8 @@ class MicroSqliteORM:
             self.connection.set_trace_callback(print)
 
     def __enter__(self):
-        self.cursor.execute("PRAGMA foreign_keys = ON")
-        self.cursor.execute("PRAGMA encoding=utf8")
+        self.cursor.execute('PRAGMA foreign_keys = ON')
+        self.cursor.execute('PRAGMA encoding=utf8')
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -36,22 +37,24 @@ class MicroSqliteORM:
     def close(self):
         return self.connection.close()
 
-    def find_many(self, table, *, select="*", skip=0, limit=100, order_by=[], where: dict | list = {}, values=[]):
-        query = f"SELECT {select} FROM {table} WHERE 1=1"
-        args = []
-
-        if isinstance(where, list):
-            query += "".join(f" AND {it}" for it in where)
-            args = values
-        else:
-            for k, v in where.items():
-                query += f" AND {k} = ?"
-                args.append(v)
+    def find_many(
+        self,
+        table,
+        *,
+        select='*',
+        skip=0,
+        limit=100,
+        order_by=[],
+        where: dict | list = {},
+    ):
+        query = f'SELECT {select} FROM {table}'
+        where, args = create_where_clause(where)
+        query += where
 
         if order_by:
             query += f" ORDER BY {','.join(order_by)}"
 
-        query += f" LIMIT {limit} OFFSET {skip}"
+        query += f' LIMIT {limit} OFFSET {skip}'
 
         return self.cursor.execute(query, args)
 
@@ -60,24 +63,22 @@ class MicroSqliteORM:
         return self.cursor.fetchone()
 
     def insert(self, table, values):
-        query = f"INSERT INTO {table}"
+        query = f'INSERT INTO {table}'
         query += f" ({','.join(values.keys())})"
         query += f" VALUES ({','.join(['?'] * len(values))})"
         args = list(values.values())
         return self.cursor.execute(query, args)
 
-    def update(self, table, *, where: str | dict, values: dict):
+    def update(self, table, *, where: dict | list = {}, values: dict):
+        query = f'UPDATE {table} SET'
+
         args = list(values.values())
-        query = f"UPDATE {table} SET"
         query += f" {','.join(f'{k} = ?' for k in values.keys())}"
 
-        if isinstance(where, str):
-            query += f" WHERE {where}"
-        else:
-            query += f" WHERE {' AND '.join(f'{k} = ?' for k in where.keys())}"
-            args.extend(where.values())
+        where, args2 = create_where_clause(where)
+        query += where
 
-        return self.cursor.execute(query, args)
+        return self.cursor.execute(query, args + args2)
 
     def upsert(self, table, *, where: str | dict, values: dict):
         result = self.find_one(table, where=where)
@@ -86,14 +87,51 @@ class MicroSqliteORM:
         return self.insert(table, values)
 
     def delete(self, table, *, where):
-        query = f"DELETE FROM {table} WHERE {where}"
-        return self.cursor.execute(query)
+        query = f'DELETE FROM {table}'
+
+        where, args = create_where_clause(where)
+        query += where
+
+        return self.cursor.execute(query, args)
 
     def begin_transaction(self):
-        self.cursor.execute("BEGIN TRANSACTION")
+        self.cursor.execute('BEGIN TRANSACTION')
 
     def commit_transaction(self):
-        self.cursor.execute("COMMIT TRANSACTION")
+        self.cursor.execute('COMMIT TRANSACTION')
 
     def end_transaction(self):
-        self.cursor.execute("END TRANSACTION")
+        self.cursor.execute('END TRANSACTION')
+
+
+def _create_base_clause(where: str | dict | list, args: List[str]) -> str:
+    if isinstance(where, int):
+        return where
+
+    if isinstance(where, str):
+        return where
+
+    elif isinstance(where, list):
+        where = [_create_base_clause(it, args) for it in where]
+        if len(where) == 0:
+            return ''
+        if len(where) == 1:
+            return where[0]
+        where = (f'({it})' for it in where if it)
+        return ' OR '.join(where)
+
+    items = []
+    for k, v in where.items():
+        op = '='
+        if isinstance(v, list):
+            op = v[0]
+            v = v[1]
+        items.append(f'{k} {op} ?')
+        args.append(v)
+    return ' AND '.join(items)
+
+
+def create_where_clause(where: str | dict | list) -> Tuple[str, List[str]]:
+    args = []
+    query = _create_base_clause(where, args)
+    return (f' WHERE {query}' if query else '', args)
