@@ -29,7 +29,7 @@ def parse_date_or_throw(field, date):
 def command_list(start='', limit=ALL_ROWS):
     if start == '':
         start = datetime.now() - timedelta(hours=48)
-    elif start:
+    elif start != 'all':
         start = parse_date_or_throw('start', start)
     else:
         start = None
@@ -76,7 +76,7 @@ def command_start_in(rowid='', message='', category='') -> Row:
     return new_row
 
 
-def command_restart(rowid='') -> Row:
+def command_restart(rowid='', start='', message='') -> Row:
     if not rowid:
         raise CommandError('No rowid given')
 
@@ -86,13 +86,18 @@ def command_restart(rowid='') -> Row:
 
     if not row.end:
         raise CommandError(f'Row with id {rowid} is still running')
+    
+    if start != '':
+        start = parse_date_or_throw('start', start)
+    else:
+        start = row.end
 
-    new_row = Row(message=row.message, start=row.start, category=row.category)
+    new_row = Row(message=row.message, start=start, category=row.category)
     new_row = TimetrackerRepository.create(new_row)
     return new_row
 
 
-def command_end(rowid='') -> Row:
+def command_end(rowid='', end="") -> Row:
     if not rowid:
         raise CommandError('No rowid given')
 
@@ -100,7 +105,12 @@ def command_end(rowid='') -> Row:
     if not row:
         raise CommandError(f'No row with id {rowid} found')
 
-    updated_row = row._replace(end=datetime.now())
+    if end != '':
+        end = parse_date_or_throw('end', end)
+    else:
+        end = datetime.now()
+
+    updated_row = row._replace(end=end)
     updated_row = TimetrackerRepository.update(updated_row)
     return updated_row
 
