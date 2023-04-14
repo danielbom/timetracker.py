@@ -3,7 +3,7 @@ from pathlib import Path
 
 from constants import DATA_DIR, DATA_ENCODING
 from core import Row
-from date_extensions import try_parse_date
+from date_extensions import try_parse_date, DATE_FORMATS
 from libraries.micro_sqlite_orm import ALL_ROWS
 from repositories import TimetrackerRepository
 
@@ -16,7 +16,7 @@ class CommandError(Exception):
 
 class InvalidDateError(CommandError):
     def __init__(self, field) -> None:
-        super().__init__(f'Invalid date given for {field}')
+        super().__init__(f'Invalid date given for {field}: the formats are {" | ".join(DATE_FORMATS)}')
 
 
 def parse_date_or_throw(field, date):
@@ -90,25 +90,24 @@ def command_restart(rowid='', start='', message='') -> Row:
     if start != '':
         start = parse_date_or_throw('start', start)
     else:
-        start = row.end
+        start = datetime.now()
 
     new_row = Row(message=row.message, start=start, category=row.category)
     new_row = TimetrackerRepository.create(new_row)
     return new_row
 
 
-def command_end(rowid='', end="") -> Row:
+def command_end(rowid='', end=None) -> Row:
     if not rowid:
         raise CommandError('No rowid given')
+    if end is not None:
+        end = parse_date_or_throw('end', end)
+    else:
+        end = datetime.now()
 
     row = TimetrackerRepository.find_by_id(rowid)
     if not row:
         raise CommandError(f'No row with id {rowid} found')
-
-    if end != '':
-        end = parse_date_or_throw('end', end)
-    else:
-        end = datetime.now()
 
     updated_row = row._replace(end=end)
     updated_row = TimetrackerRepository.update(updated_row)
