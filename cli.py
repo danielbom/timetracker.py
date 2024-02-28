@@ -1,6 +1,7 @@
 import argparse
 from datetime import datetime, timedelta
 from itertools import groupby
+from pathlib import Path
 import sqlite3
 from typing import Optional
 from constants import DB_DATE_FORMAT, DB_PATH
@@ -251,7 +252,7 @@ def command_list(args: CommandList):
 
 class CommandExport(argparse.Namespace):
     path: str
-    format: str
+    format: Optional[str]
 
 
 def command_export(args: CommandExport):
@@ -260,39 +261,77 @@ def command_export(args: CommandExport):
     connection = sqlite3.connect(DB_PATH)
     cursor = connection.cursor()
     cursor.execute(
-        'SELECT rowid, message, start, end, category ' +
+        'SELECT rowid, start, end, category, message ' +
         'FROM timetrack ' +
         'ORDER BY start'
     )
     rows = cursor.fetchall()
     connection.close()
 
-    if args.format == 'csv':
+    out_format = args.format
+    if out_format is None:
+        out_format = Path(args.path).suffix[1:]
+
+    if out_format == 'csv':
         with open(args.path, 'w') as f:
-            print('start,message,end,category', file=f)
+            print('start,end,category,message', file=f)
             for row in rows:
-                print(
-                    f'{row[0]},"{row[1]}",{row[2]},{row[3]},"{row[4]}"', file=f)
-    elif args.format == 'json':
+                print(f'{row[1]},{row[2] or ""},"{row[3]}","{row[4]}"', file=f)
+        print(f'Exported {len(rows)} rows to {args.path}')
+
+    elif out_format == 'json':
         with open(args.path, 'w') as f:
             json.dump([{
-                'id': row[0],
-                'message': row[1],
-                'start': row[2],
-                'end': row[3],
-                'category': row[4]
+                'start': row[1],
+                'end': row[2],
+                'category': row[3],
+                'message': row[4],
             } for row in rows], f)
+        print(f'Exported {len(rows)} rows to {args.path}')
 
 
 class CommandImport(argparse.Namespace):
     path: str
-    format: str
+    format: Optional[str]
+
+
+def batched(values, batch_size):
+    for batch_ix in range(0, len(values), batch_size):
+        yield values[batch_ix:batch_ix + batch_size]
 
 
 def command_import(args):
     "Import time tracking entries from 'format' file"
-    print(args)
-    raise NotImplementedError()
+    in_format = args.format
+    if in_format is None:
+        in_format = Path(args.path).suffix[1:]
+
+    if in_format == 'csv':
+        data = []
+        with open(args.path) as f:
+            for i, line in enumerate(f):
+                if i == 0:
+                    header = line.strip().split(',')
+                else:
+                    row = line.strip().split(',')
+                    data.append(dict(zip(header, row)))
+
+    elif in_format == 'json':
+        with open(args.path) as f:
+            data = json.load(f)
+
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    for batch in batched(data, 100):
+        cursor.executemany(
+            'INSERT INTO timetrack (start, end, category, message) '
+            'VALUES (?, ?, ?, ?)',
+            [(row['start'], row['end'], row['category'], row['message'])
+                for row in batch]
+        )
+        connection.commit()
+    connection.close()
+    print(f'Imported {len(data)} rows from {args.path}')
 
 
 class CommandMetrics(argparse.Namespace):
@@ -383,11 +422,11 @@ def get_parser():
 
     sb = command(command_export)
     sb.add_argument('path', type=str)
-    sb.add_argument('--format', default='csv', choices=['csv', 'json'])
+    sb.add_argument('--format', default=None, choices=['csv', 'json'])
 
     sb = command(command_import)
     sb.add_argument('path', type=str)
-    sb.add_argument('--format', default='csv', choices=['csv', 'json'])
+    sb.add_argument('--format', default=None, choices=['csv', 'json'])
 
     sb = command(command_metrics)
     sb.add_argument('--start', default=None)
