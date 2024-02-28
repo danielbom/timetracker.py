@@ -12,6 +12,11 @@ from date_extensions import DATE_FORMATS, parse_date_db, try_parse_date
 UNSET = object()
 
 
+def batched(values, batch_size):
+    for batch_ix in range(0, len(values), batch_size):
+        yield values[batch_ix:batch_ix + batch_size]
+
+
 class CommandError(Exception):
     pass
 
@@ -237,21 +242,30 @@ def command_list(args: CommandList):
     "List time tracking entries"
     # TODO: Add ms formatter
     if args.start is None:
-        args.start = datetime.now() - timedelta(hours=48)
+        start = datetime.now() - timedelta(hours=48)
+        start = start.strftime(DB_DATE_FORMAT)
     elif args.start != 'all':
-        args.start = parse_date_or_throw('start', args.start)
+        start = parse_date_or_throw('start', args.start)
+        start = start.strftime(DB_DATE_FORMAT)
     else:
-        args.start = None
+        start = None
 
     connection = sqlite3.connect(DB_PATH)
     cursor = get_cursor(connection)
-    cursor.execute(
-        'SELECT rowid, message, start, end, category ' +
-        'FROM timetrack ' +
-        ('WHERE start >= ? ' if args.start else '') +
-        'ORDER BY start',
-        (args.start,)
-    )
+    if start:
+        cursor.execute(
+            'SELECT rowid, message, start, end, category '
+            'FROM timetrack '
+            'WHERE start >= ? '
+            'ORDER BY start',
+            (start,)
+        )
+    else:
+        cursor.execute(
+            'SELECT rowid, message, start, end, category '
+            'FROM timetrack '
+            'ORDER BY start'
+        )
     for row in cursor:
         print(row)
     connection.close()
@@ -268,8 +282,8 @@ def command_export(args: CommandExport):
     connection = sqlite3.connect(DB_PATH)
     cursor = get_cursor(connection)
     cursor.execute(
-        'SELECT rowid, start, end, category, message ' +
-        'FROM timetrack ' +
+        'SELECT rowid, start, end, category, message '
+        'FROM timetrack '
         'ORDER BY start'
     )
     rows = cursor.fetchall()
@@ -302,12 +316,7 @@ class CommandImport(argparse.Namespace):
     format: Optional[str]
 
 
-def batched(values, batch_size):
-    for batch_ix in range(0, len(values), batch_size):
-        yield values[batch_ix:batch_ix + batch_size]
-
-
-def command_import(args):
+def command_import(args: CommandImport):
     "Import time tracking entries from 'format' file"
     in_format = args.format
     if in_format is None:
