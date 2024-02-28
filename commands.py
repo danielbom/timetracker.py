@@ -16,7 +16,8 @@ class CommandError(Exception):
 
 class InvalidDateError(CommandError):
     def __init__(self, field) -> None:
-        super().__init__(f'Invalid date given for {field}: the formats are {" | ".join(DATE_FORMATS)}')
+        super().__init__(
+            f'Invalid date given for {field}: the formats are {" | ".join(DATE_FORMATS)}')
 
 
 def parse_date_or_throw(field, date):
@@ -86,7 +87,7 @@ def command_restart(rowid='', start='', message='') -> Row:
 
     if not row.end:
         raise CommandError(f'Row with id {rowid} is still running')
-    
+
     if start != '':
         start = parse_date_or_throw('start', start)
     else:
@@ -139,12 +140,17 @@ def command_drop(rowid=''):
     if not rowid:
         raise CommandError('No rowid given')
 
+    if rowid == 'all':
+        rows = TimetrackerRepository.find_many()
+        TimetrackerRepository().delete_all()
+        return rows
+
     row = TimetrackerRepository.find_by_id(rowid)
     if not row:
         raise CommandError(f'No row with id {rowid} found')
 
     TimetrackerRepository.delete_by_id(rowid)
-    return row
+    return [row]
 
 
 def command_from_csv(input_file=''):

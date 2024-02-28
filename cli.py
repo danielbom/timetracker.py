@@ -106,8 +106,13 @@ def cmd_edit(args):
 
 
 def cmd_drop(args):
-    row = command_drop(*args)
-    _print_row(row)
+    rows = command_drop(*args)
+
+    for row in rows:
+        start_day = row.start.strftime(CLI_DATE_FORMAT)
+        start = row.start.strftime(CLI_HOUR_FORMAT)
+        end = row.end.strftime(CLI_HOUR_FORMAT) if row.end else '--:--'
+        print(f'{start_day} | {start} .. {end} | {row.message}')
     print('Deleted')
 
 

@@ -88,6 +88,10 @@ class TimetrackerRepository:
         with MicroSqliteORM(DB_PATH) as orm:
             return orm.delete('timetrack', where={'rowid': rowid})
 
+    def delete_all(self):
+        with MicroSqliteORM(DB_PATH) as orm:
+            return orm.delete('timetrack', where={})
+
     @staticmethod
     def max_rowid(**kargs) -> int:
         with MicroSqliteORM(DB_PATH) as orm:
