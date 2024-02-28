@@ -22,6 +22,13 @@ class InvalidDateError(CommandError):
             f'Invalid date given for {field}\nValid formats: {", ".join(DATE_FORMATS)}')
 
 
+def get_cursor(connection: sqlite3.Connection) -> sqlite3.Cursor:
+    cursor = connection.cursor()
+    cursor.execute('PRAGMA foreign_keys=ON')
+    cursor.execute('PRAGMA encoding=utf8')
+    return cursor
+
+
 def parse_date_or_throw(field, date):
     date = try_parse_date(date)
     if date is None:
@@ -36,7 +43,7 @@ class CommandSetup(argparse.Namespace):
 def command_setup(args: CommandSetup):
     "Setup the database"
     connection = sqlite3.connect(args.database_path)
-    cursor = connection.cursor()
+    cursor = get_cursor(connection)
     cursor.execute('PRAGMA foreign_keys=ON')
     cursor.execute('PRAGMA encoding=utf8')
     cursor.execute(
@@ -76,7 +83,7 @@ def command_start(args: CommandStart):
         end = end.strftime(DB_DATE_FORMAT)
 
     connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
+    cursor = get_cursor(connection)
     cursor.execute(
         'INSERT INTO timetrack (message, start, end, category) '
         'VALUES (?, ?, ?, ?) '
@@ -99,7 +106,7 @@ def command_start_in(args):
     "Start a new time tracking entry in the end of other entry"
 
     connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
+    cursor = get_cursor(connection)
     cursor.execute(
         'SELECT end FROM timetrack WHERE rowid = ?',
         (args.id,)
@@ -136,7 +143,7 @@ def command_end(args: CommandEnd):
         end = end.strftime(DB_DATE_FORMAT)
 
     connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
+    cursor = get_cursor(connection)
     cursor.execute(
         'UPDATE timetrack SET end = ? WHERE rowid = ? '
         'RETURNING rowid, message, start, end, category',
@@ -161,7 +168,7 @@ def command_drop(args: CommandDrop):
     if args.all:
         print('Deleting all')
         connection = sqlite3.connect(DB_PATH)
-        cursor = connection.cursor()
+        cursor = get_cursor(connection)
         cursor.execute('DELETE FROM timetrack')
         count = cursor.rowcount
         connection.commit()
@@ -170,7 +177,7 @@ def command_drop(args: CommandDrop):
     else:
         print('Deleting', args.id)
         connection = sqlite3.connect(DB_PATH)
-        cursor = connection.cursor()
+        cursor = get_cursor(connection)
         cursor.execute('DELETE FROM timetrack WHERE rowid = ?', (args.id,))
         count = cursor.rowcount
         connection.commit()
@@ -189,7 +196,7 @@ class CommandEdit(argparse.Namespace):
 def command_edit(args):
     "Edit a time tracking entry"
     connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
+    cursor = get_cursor(connection)
     cursor.execute('SELECT * FROM timetrack WHERE rowid = ?', (args.id,))
     row = cursor.fetchone()
     if row is None:
@@ -237,7 +244,7 @@ def command_list(args: CommandList):
         args.start = None
 
     connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
+    cursor = get_cursor(connection)
     cursor.execute(
         'SELECT rowid, message, start, end, category ' +
         'FROM timetrack ' +
@@ -259,7 +266,7 @@ def command_export(args: CommandExport):
     "Export time tracking entries to 'format' file"
 
     connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
+    cursor = get_cursor(connection)
     cursor.execute(
         'SELECT rowid, start, end, category, message ' +
         'FROM timetrack ' +
@@ -321,7 +328,7 @@ def command_import(args):
             data = json.load(f)
 
     connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
+    cursor = get_cursor(connection)
     for batch in batched(data, 100):
         cursor.executemany(
             'INSERT INTO timetrack (start, end, category, message) '
@@ -349,7 +356,7 @@ def command_metrics(args: CommandMetrics):
         end = parse_date_or_throw('end', args.end)
 
     connection = sqlite3.connect(DB_PATH)
-    cursor = connection.cursor()
+    cursor = get_cursor(connection)
     if end:
         cursor.execute(
             'SELECT category, start, end '
