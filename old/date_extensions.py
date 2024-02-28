@@ -25,7 +25,3 @@ def try_parse_date(date: str) -> Optional[datetime]:
         except ValueError:
             pass
     return None
-
-
-def parse_date_db(date: str) -> datetime:
-    return datetime.strptime(date.replace(' ', 'T'), DB_DATE_FORMAT)

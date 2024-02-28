@@ -1,182 +1,409 @@
-import sys
-import traceback
+import argparse
 from datetime import datetime, timedelta
 from itertools import groupby
+import sqlite3
+from typing import Optional
+from constants import DB_DATE_FORMAT, DB_PATH
+import json
 
-from commands import (command_drop, command_edit, command_end,
-                      command_from_csv, command_list, command_restart,
-                      command_start, command_start_in, command_to_csv)
-from constants import CLI_DATE_FORMAT, CLI_HOUR_FORMAT, CLI_PRINT_DATE_FORMAT
-from core import Row
-from repositories import TimetrackerRepository
+from date_extensions import DATE_FORMATS, parse_date_db, try_parse_date
 
-
-def clean_args_skip(args):
-    return [it if it != '-' else '' for it in args]
+UNSET = object()
 
 
-def normalize_durantion(duration: timedelta):
-    return duration - timedelta(microseconds=duration.microseconds)
+class CommandError(Exception):
+    pass
 
 
-def _sum_timedelta(iterable):
-    return sum(iterable, timedelta(0))
+class InvalidDateError(CommandError):
+    def __init__(self, field) -> None:
+        super().__init__(
+            f'Invalid date given for {field}\nValid formats: {", ".join(DATE_FORMATS)}')
 
 
-def _format_duration(duration: timedelta):
-    hours, remainder = divmod(duration.total_seconds(), 3600)
-    minutes, _seconds = divmod(remainder, 60)
-    return f'{int(hours):02d}:{int(minutes):02d}'
+def parse_date_or_throw(field, date):
+    date = try_parse_date(date)
+    if date is None:
+        raise InvalidDateError(field)
+    return date
 
 
-def _print_row(row: Row):
-    # https://stackoverflow.com/questions/31018497/how-to-format-duration-in-python-timedelta
-    start = row.start.strftime(CLI_PRINT_DATE_FORMAT)
-    end = row.end.strftime(CLI_PRINT_DATE_FORMAT) if row.end else (' ' * 15)
-    duration = _format_duration((row.end or datetime.now()) - row.start)
-    print(f'{start} .. {end} | {duration} | [{row.rowid}] {row.message}')
+class CommandSetup(argparse.Namespace):
+    database_path: str = DB_PATH
 
 
-def cmd_list(args):
-    now = datetime.now()
-    rows = command_list(*clean_args_skip(args))
+def command_setup(args: CommandSetup):
+    "Setup the database"
+    connection = sqlite3.connect(args.database_path)
+    cursor = connection.cursor()
+    cursor.execute('PRAGMA foreign_keys=ON')
+    cursor.execute('PRAGMA encoding=utf8')
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS timetrack ("
+        "  start DATETIME NOT NULL,"
+        "  message TEXT NOT NULL,"
+        "  end DATETIME,"
+        "  category TEXT"
+        ")"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS timetrack_start ON timetrack (start DESC)"
+    )
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS timetrack_start_message ON timetrack (start, message)"
+    )
+    cursor.execute('pragma encoding')
 
-    max_rowid = TimetrackerRepository.max_rowid()
-    rowid_len = len(str(max_rowid))
 
-    for row in rows:
-        start_day = row.start.strftime(CLI_DATE_FORMAT)
-        start = row.start.strftime(CLI_HOUR_FORMAT)
-        end = row.end.strftime(CLI_HOUR_FORMAT) if row.end else '--:--'
-        duration = _format_duration((row.end or now) - row.start)
-        rowid = str(row.rowid).rjust(rowid_len)
-        print(
-            f'{rowid}: {start_day} | {start} .. {end} | {duration} | {row.message}'
+class CommandStart(argparse.Namespace):
+    message: str
+    category: Optional[str]
+    start: Optional[str]
+    end: Optional[str]
+
+
+def command_start(args: CommandStart):
+    "Start a new time tracking entry"
+    start = datetime.now().strftime(DB_DATE_FORMAT)
+    end = None
+    if args.start is not None:
+        start = parse_date_or_throw('start', args.start)
+        start = start.strftime(DB_DATE_FORMAT)
+
+    if end is not None:
+        end = parse_date_or_throw('end', args.end)
+        end = end.strftime(DB_DATE_FORMAT)
+
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    cursor.execute(
+        'INSERT INTO timetrack (message, start, end, category) '
+        'VALUES (?, ?, ?, ?) '
+        'RETURNING rowid, message, start, end, category',
+        (args.message, start, end, args.category)
+    )
+    row = cursor.fetchone()
+    connection.commit()
+    connection.close()
+    print(row)
+
+
+class CommandStartIn(argparse.Namespace):
+    id: int
+    message: str
+    category: Optional[str]
+
+
+def command_start_in(args):
+    "Start a new time tracking entry in the end of other entry"
+
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    cursor.execute(
+        'SELECT end FROM timetrack WHERE rowid = ?',
+        (args.id,)
+    )
+    row = cursor.fetchone()
+    if row is None:
+        raise CommandError(f'No row with id {args.id} found')
+
+    if row[0] is None:
+        raise CommandError(f'Row with id {args.id} is still running')
+
+    cursor.execute(
+        'INSERT INTO timetrack (message, start, end, category) '
+        'VALUES (?, ?, ?, ?) '
+        'RETURNING rowid, message, start, end, category',
+        (args.message, row[0], None, args.category)
+    )
+    row = cursor.fetchone()
+    connection.commit()
+    connection.close()
+    print(row)
+
+
+class CommandEnd(argparse.Namespace):
+    id: int
+    end: Optional[str]
+
+
+def command_end(args: CommandEnd):
+    "End a time tracking entry"
+    end = datetime.now().strftime(DB_DATE_FORMAT)
+    if args.end is not None:
+        end = parse_date_or_throw('end', args.end)
+        end = end.strftime(DB_DATE_FORMAT)
+
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    cursor.execute(
+        'UPDATE timetrack SET end = ? WHERE rowid = ? '
+        'RETURNING rowid, message, start, end, category',
+        (end, args.id)
+    )
+    row = cursor.fetchone()
+    connection.commit()
+    connection.close()
+    print(row)
+
+
+class CommandDrop(argparse.Namespace):
+    id: Optional[int]
+    all: bool
+
+
+def command_drop(args: CommandDrop):
+    "Drop a time tracking entry"
+    if args.id is None and not args.all:
+        raise CommandError('No id given')
+
+    if args.all:
+        print('Deleting all')
+        connection = sqlite3.connect(DB_PATH)
+        cursor = connection.cursor()
+        cursor.execute('DELETE FROM timetrack')
+        count = cursor.rowcount
+        connection.commit()
+        connection.close()
+        print(f'Deleted {count} rows')
+    else:
+        print('Deleting', args.id)
+        connection = sqlite3.connect(DB_PATH)
+        cursor = connection.cursor()
+        cursor.execute('DELETE FROM timetrack WHERE rowid = ?', (args.id,))
+        count = cursor.rowcount
+        connection.commit()
+        connection.close()
+        print(f'Deleted {count} rows')
+
+
+class CommandEdit(argparse.Namespace):
+    id: int
+    message: Optional[str]
+    category: Optional[str]
+    start: Optional[str]
+    end: Optional[str]
+
+
+def command_edit(args):
+    "Edit a time tracking entry"
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    cursor.execute('SELECT * FROM timetrack WHERE rowid = ?', (args.id,))
+    row = cursor.fetchone()
+    if row is None:
+        raise CommandError(f'No row with id {args.id} found')
+
+    fields = {'message': args.message, 'category': args.category,
+              'start': args.start, 'end': args.end}
+    fields = {k: v for k, v in fields.items() if v is not UNSET}
+    if 'start' in fields:
+        fields['start'] = parse_date_or_throw('start', fields['start'])
+        fields['start'] = fields['start'].strftime(DB_DATE_FORMAT)
+    if 'end' in fields:
+        fields['end'] = parse_date_or_throw('end', fields['end'])
+        fields['end'] = fields['end'].strftime(DB_DATE_FORMAT)
+    if not fields:
+        print('No changes given')
+        return
+
+    update = ', '.join(f'{k} = ?' for k in fields)
+    values = [v for v in fields.values()]
+    values.append(args.id)
+    cursor.execute(
+        f'UPDATE timetrack SET {update} WHERE rowid = ? '
+        'RETURNING rowid, message, start, end, category',
+        values
+    )
+    row = cursor.fetchone()
+    connection.commit()
+    connection.close()
+    print(row)
+
+
+class CommandList(argparse.Namespace):
+    start: Optional[str]
+
+
+def command_list(args: CommandList):
+    "List time tracking entries"
+    # TODO: Add ms formatter
+    if args.start is None:
+        args.start = datetime.now() - timedelta(hours=48)
+    elif args.start != 'all':
+        args.start = parse_date_or_throw('start', args.start)
+    else:
+        args.start = None
+
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    cursor.execute(
+        'SELECT rowid, message, start, end, category ' +
+        'FROM timetrack ' +
+        ('WHERE start >= ? ' if args.start else '') +
+        'ORDER BY start',
+        (args.start,)
+    )
+    for row in cursor:
+        print(row)
+    connection.close()
+
+
+class CommandExport(argparse.Namespace):
+    path: str
+    format: str
+
+
+def command_export(args: CommandExport):
+    "Export time tracking entries to 'format' file"
+
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    cursor.execute(
+        'SELECT rowid, message, start, end, category ' +
+        'FROM timetrack ' +
+        'ORDER BY start'
+    )
+    rows = cursor.fetchall()
+    connection.close()
+
+    if args.format == 'csv':
+        with open(args.path, 'w') as f:
+            print('start,message,end,category', file=f)
+            for row in rows:
+                print(
+                    f'{row[0]},"{row[1]}",{row[2]},{row[3]},"{row[4]}"', file=f)
+    elif args.format == 'json':
+        with open(args.path, 'w') as f:
+            json.dump([{
+                'id': row[0],
+                'message': row[1],
+                'start': row[2],
+                'end': row[3],
+                'category': row[4]
+            } for row in rows], f)
+
+
+class CommandImport(argparse.Namespace):
+    path: str
+    format: str
+
+
+def command_import(args):
+    "Import time tracking entries from 'format' file"
+    print(args)
+    raise NotImplementedError()
+
+
+class CommandMetrics(argparse.Namespace):
+    start: Optional[str]
+    end: Optional[str]
+
+
+def command_metrics(args: CommandMetrics):
+    "Show metrics"
+    start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    end = None
+    if args.start:
+        start = parse_date_or_throw('start', args.start)
+    if args.end:
+        end = parse_date_or_throw('end', args.end)
+
+    connection = sqlite3.connect(DB_PATH)
+    cursor = connection.cursor()
+    if end:
+        cursor.execute(
+            'SELECT category, start, end '
+            'FROM timetrack '
+            'WHERE start >= ? AND end <= ?',
+            (start, end)
         )
-
-
-def cmd_start(args):
-    new_row = command_start(*clean_args_skip(args))
-    _print_row(new_row)
-
-
-def cmd_start_in(args):
-    if len(args) < 1:
-        print('Error: No id given')
-        exit(1)
-
-    new_row = command_start_in(*clean_args_skip(args))
-    _print_row(new_row)
-
-
-def cmd_restart(args):
-    if len(args) < 1:
-        print('Error: No id given')
-        exit(1)
-
-    new_row = command_restart(*clean_args_skip(args))
-    _print_row(new_row)
-
-
-def cmd_end(args):
-    if len(args) < 1:
-        print('Error: No id given')
-        exit(1)
-
-    row = command_end(*clean_args_skip(args))
-    _print_row(row)
-
-
-def cmd_edit(args):
-    def parse_edit(text):
-        parts = text.split(',')
-        key_values = [part.split('=') for part in parts]
-        return {key: value for key, value in key_values}
-
-    if len(args) < 1:
-        print('Error: No id given')
-        exit(1)
-
-    if len(args) < 2:
-        print('Error: No edit given')
-        exit(1)
-
-    row = command_edit(args[0], **parse_edit(args[1]))
-    _print_row(row)
-
-
-def cmd_drop(args):
-    rows = command_drop(*args)
-
-    for row in rows:
-        start_day = row.start.strftime(CLI_DATE_FORMAT)
-        start = row.start.strftime(CLI_HOUR_FORMAT)
-        end = row.end.strftime(CLI_HOUR_FORMAT) if row.end else '--:--'
-        print(f'{start_day} | {start} .. {end} | {row.message}')
-    print('Deleted')
-
-
-def cmd_to_csv(args):
-    command_to_csv(args[0] if len(args) > 0 else '')
-    print('Done')
-
-
-def cmd_from_csv(args):
-    command_from_csv(args[0] if len(args) > 0 else '')
-    print('Done')
-
-
-def cmd_metrics(args):
-    # TODO: Improve this metrics
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    rows = TimetrackerRepository.find_many(today)
+    else:
+        cursor.execute(
+            'SELECT category, start, end '
+            'FROM timetrack '
+            'WHERE start >= ?',
+            (start,)
+        )
+    rows = cursor.fetchall()
+    rows = [(row[0], parse_date_db(row[1]), row[2] and parse_date_db(row[2]))
+            for row in rows]
+    cat_rows = [row for row in rows if row[0]]
     print(f'Total rows: {len(rows)}')
-    print(f'Total time: {_sum_timedelta(row.duration for row in rows)}')
+    print(
+        f'Total time: {sum((row[2] - row[1] for row in rows if row[2]), timedelta())}')
+    print(f'Total rows with category: {len(cat_rows)}')
 
-    rows_with_category = [row for row in rows if row.category]
-    print(f'Total rows with category: {len(rows_with_category)}')
-
-    for category, category_rows in groupby(
-        rows_with_category, key=lambda row: row.category
-    ):
+    for category, category_rows in groupby(cat_rows, key=lambda row: row[0]):
         print(
-            f'{category}: {_sum_timedelta(row.duration for row in category_rows)}'
-        )
+            f'{category}: {sum((row[2] - row[1] for row in category_rows if row[2]), timedelta())}')
 
 
-def cmd_help():
-    commands = [
-        ('start    <message> <category?> <start?> <end?>', 'Start a new row'),
-        (
-            'start-in <id> <message> <category?>',
-            'Start a new row in the end of a row',
-        ),
-        ('restart  <id>', 'Restart a row'),
-        ('end      <id>', 'End a row'),
-        ('drop     <id>', 'Drop a row'),
-        ('edit     <id> <field=value*>', 'Drop a row'),
-        ('list     <date?>', 'List all rows'),
-        ('to-csv', 'Export to CSV'),
-        ('from-csv', 'Import from CSV'),
-        ('metrics', 'Show metrics'),
-        ('help', 'Show this help'),
-    ]
-    print('Usage: cli.py [command]')
-    print('Commands:')
-    print('')
-    for command, description in commands:
-        print(f'  {command:50} - {description}')
+def get_parser():
+    def command(func):
+        name = func.__name__[len("command_"):].replace("_", "-")
+        parser = subparsers.add_parser(name, help=func.__doc__)
+        parser.set_defaults(func=func)
+        return parser
+
+    parser = argparse.ArgumentParser(description='Time tracker')
+    subparsers = parser.add_subparsers(dest='command')
+
+    sb = command(command_setup)
+    sb.add_argument('--database-path', default=DB_PATH)
+
+    sb = command(command_start)
+    sb.add_argument('message', type=str)
+    sb.add_argument('-c', '--category', type=str, default=None)
+    sb.add_argument('-s', '--start', default=None)
+    sb.add_argument('-e', '--end', default=None)
+
+    sb = command(command_start_in)
+    sb.add_argument('id', type=int)
+    sb.add_argument('message', type=str)
+    sb.add_argument('--category', default=None)
+
+    sb = command(command_end)
+    sb.add_argument('id', type=int)
+    sb.add_argument('--end', default=None)
+
+    sb = command(command_drop)
+    sb.add_argument('id', type=int, default=None, nargs='?')
+    sb.add_argument('--all', action='store_true')
+
+    sb = command(command_edit)
+    sb.add_argument('id', type=int)
+    sb.add_argument('-m', '--message', type=str, default=UNSET)
+    sb.add_argument('-c', '--category', type=str, default=UNSET)
+    sb.add_argument('-s', '--start', default=UNSET)
+    sb.add_argument('-e', '--end', default=UNSET)
+
+    sb = command(command_list)
+    sb.add_argument('--start', default=None)
+
+    sb = command(command_export)
+    sb.add_argument('path', type=str)
+    sb.add_argument('--format', default='csv', choices=['csv', 'json'])
+
+    sb = command(command_import)
+    sb.add_argument('path', type=str)
+    sb.add_argument('--format', default='csv', choices=['csv', 'json'])
+
+    sb = command(command_metrics)
+    sb.add_argument('--start', default=None)
+    sb.add_argument('--end', default=None)
+
+    return parser
+
+
+def main():
+    parser = get_parser()
+    args = parser.parse_args()
+    if args.command:
+        args.func(args)
+    else:
+        parser.print_help()
 
 
 if __name__ == '__main__':
-    args = sys.argv[1:]
-    cmd = globals().get(f"cmd_{args[0].replace('-', '_')}") if args else None
-    if cmd:
-        try:
-            cmd(args[1:])
-        except Exception as e:
-            print('Error:', e)
-            traceback.print_exc()
-            exit(1)
-    else:
-        cmd_help()
+    main()
