@@ -1,15 +1,57 @@
 import argparse
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from itertools import groupby
 from pathlib import Path
 import sqlite3
 from typing import Optional
-from constants import DB_DATE_FORMAT, DB_PATH
+from constants import CLI_DATE_FORMAT, CLI_HOUR_FORMAT, CLI_PRINT_DATE_FORMAT, DB_DATE_FORMAT, DB_PATH
 import json
 
 from date_extensions import DATE_FORMATS, parse_date_db, try_parse_date
 
 UNSET = object()
+
+
+def format_duration(duration: timedelta):
+    hours, remainder = divmod(duration.total_seconds(), 3600)
+    minutes, _seconds = divmod(remainder, 60)
+    return f'{int(hours):02d}:{int(minutes):02d}'
+
+
+@dataclass
+class Timetracker:
+    rowid: int
+    message: str
+    start: datetime
+    end: Optional[datetime]
+    category: Optional[str]
+
+    @classmethod
+    def from_row(cls, row: tuple):
+        return cls(row[0], row[1], parse_date_db(row[2]), row[3] and parse_date_db(row[3]), row[4])
+
+    def show(self, now: Optional[datetime] = None, rowid_len: int = 0):
+        # https://stackoverflow.com/questions/31018497/how-to-format-duration-in-python-timedelta
+        if now is None:
+            now = datetime.now()
+        duration_delta = (self.end or now) - self.start
+        duration = format_duration(duration_delta)
+        if duration_delta > timedelta(days=1):
+            start = self.start.strftime(CLI_PRINT_DATE_FORMAT)
+            end = ' ' * 15
+            if self.end:
+                end = self.end.strftime(CLI_PRINT_DATE_FORMAT)
+            duration = format_duration((self.end or now) - self.start)
+            rowid = str(self.rowid).rjust(rowid_len)
+            print(f'{rowid}: {start} .. {end} | {duration} {self.message}')
+        else:
+            start_day = self.start.strftime(CLI_DATE_FORMAT)
+            start = self.start.strftime(CLI_HOUR_FORMAT)
+            end = self.end.strftime(CLI_HOUR_FORMAT) if self.end else '--:--'
+            rowid = str(self.rowid).rjust(rowid_len)
+            print(
+                f'{rowid}: {start_day} | {start} .. {end} | {duration} | {self.message}')
 
 
 def batched(values, batch_size):
@@ -96,9 +138,10 @@ def command_start(args: CommandStart):
         (args.message, start, end, args.category)
     )
     row = cursor.fetchone()
+    entity = Timetracker.from_row(row)
     connection.commit()
     connection.close()
-    print(row)
+    entity.show()
 
 
 class CommandStartIn(argparse.Namespace):
@@ -130,9 +173,10 @@ def command_start_in(args):
         (args.message, row[0], None, args.category)
     )
     row = cursor.fetchone()
+    entity = Timetracker.from_row(row)
     connection.commit()
     connection.close()
-    print(row)
+    entity.show()
 
 
 class CommandEnd(argparse.Namespace):
@@ -155,9 +199,10 @@ def command_end(args: CommandEnd):
         (end, args.id)
     )
     row = cursor.fetchone()
+    entity = Timetracker.from_row(row)
     connection.commit()
     connection.close()
-    print(row)
+    entity.show()
 
 
 class CommandDrop(argparse.Namespace):
@@ -229,9 +274,10 @@ def command_edit(args):
         values
     )
     row = cursor.fetchone()
+    entity = Timetracker.from_row(row)
     connection.commit()
     connection.close()
-    print(row)
+    entity.show()
 
 
 class CommandList(argparse.Namespace):
@@ -252,6 +298,13 @@ def command_list(args: CommandList):
 
     connection = sqlite3.connect(DB_PATH)
     cursor = get_cursor(connection)
+
+    rowid_len = 0
+    cursor.execute('SELECT MAX(rowid) FROM timetrack')
+    row = cursor.fetchone()
+    if row:
+        rowid_len = len(str(row[0]))
+
     if start:
         cursor.execute(
             'SELECT rowid, message, start, end, category '
@@ -266,8 +319,11 @@ def command_list(args: CommandList):
             'FROM timetrack '
             'ORDER BY start'
         )
+
+    now = datetime.now()
     for row in cursor:
-        print(row)
+        entity = Timetracker.from_row(row)
+        entity.show(now, rowid_len)
     connection.close()
 
 

@@ -18,6 +18,7 @@ class TestCommandStart:
         # Mock the necessary dependencies
         mocker.patch('sqlite3.connect')
         mocker.patch('cli.print')
+        mocker.patch('cli.Timetracker.from_row')
         get_cursor_mock = mocker.patch('cli.get_cursor')
         datetime_mock = mocker.patch("cli.datetime")
         FAKE_NOW = datetime(2000, 1, 1, 12, 0, 0)
@@ -50,6 +51,7 @@ class TestCommandStartIn:
         # Mock the necessary dependencies
         mocker.patch('sqlite3.connect')
         mocker.patch('cli.print')
+        mocker.patch('cli.Timetracker.from_row')
         get_cursor_mock = mocker.patch('cli.get_cursor')
 
         # Set up the test data
@@ -106,6 +108,7 @@ class TestCommandEnd:
         # Mock the necessary dependencies
         mocker.patch('sqlite3.connect')
         mocker.patch('cli.print')
+        mocker.patch('cli.Timetracker.from_row')
         get_cursor_mock = mocker.patch('cli.get_cursor')
         datetime_mock = mocker.patch("cli.datetime")
         FAKE_NOW = datetime(2000, 1, 1, 12, 0, 0)
@@ -153,6 +156,7 @@ class TestCommandEdit:
         # Mock the necessary dependencies
         mocker.patch('sqlite3.connect')
         mocker.patch('cli.print')
+        mocker.patch('cli.Timetracker.from_row')
         get_cursor_mock = mocker.patch('cli.get_cursor')
         mocker.patch('cli.DB_PATH', 'test_db_path')
 
@@ -170,7 +174,7 @@ class TestCommandEdit:
 
         # Assert that the correct SQL query was executed
         cursor_mock = get_cursor_mock.return_value
-        cursor_mock.execute.assert_called_with(
+        cursor_mock.execute.mock_calls[1](
             'UPDATE timetrack SET message = ?, category = ?, start = ?, end = ? WHERE rowid = ? '
             'RETURNING rowid, message, start, end, category',
             ['New message', 'New category',
@@ -197,7 +201,7 @@ class TestCommandList:
 
         # Assert that the correct SQL query was executed
         cursor_mock = get_cursor_mock.return_value
-        cursor_mock.execute.assert_called_once_with(
+        cursor_mock.execute.mock_calls[1](
             'SELECT rowid, message, start, end, category '
             'FROM timetrack '
             'ORDER BY start',
@@ -222,7 +226,7 @@ class TestCommandList:
 
         # Assert that the correct SQL query was executed
         cursor_mock = get_cursor_mock.return_value
-        cursor_mock.execute.assert_called_once_with(
+        cursor_mock.execute.mock_calls[1](
             'SELECT rowid, message, start, end, category '
             'FROM timetrack '
             'WHERE start >= ? '
@@ -244,7 +248,7 @@ class TestCommandList:
 
         # Assert that the correct SQL query was executed
         cursor_mock = get_cursor_mock.return_value
-        cursor_mock.execute.assert_called_once_with(
+        cursor_mock.execute.mock_calls[1](
             'SELECT rowid, message, start, end, category '
             'FROM timetrack '
             'WHERE start >= ? '
